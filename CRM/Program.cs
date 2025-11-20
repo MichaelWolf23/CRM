@@ -5,7 +5,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 
-public class BaseRepository<T>
+public abstract class BaseRepository<T> where T : class
 {
     protected List<T> _items;
     protected readonly string _filePath;
@@ -74,7 +74,23 @@ public class Program
         
         await clientRepo.SaveAsync();
         Console.WriteLine("Данные сохранены в файл");
+
+        //================================================================
+
+        string orderFile = "orders.json";
+        var orderRepo = new OrderRepository(orderFile);
+
+        Console.WriteLine("--- Начальный список заказов ---");
+        PrintOrder(orderRepo.GetAll());
+
+        Console.WriteLine("--- Добавляем новый заказ ---");
+        orderRepo.Add(1, "Разработать логотип", 15000m, DateOnly.FromDateTime(DateTime.Now.AddDays(10)));
+        PrintOrder(orderRepo.GetAll());
+
+        await orderRepo.SaveAsync();
+        Console.WriteLine("Данные сохранены в файл");
     }
+
     public static void PrintClient(List<Client> clients)
     {
         if (!clients.Any())
@@ -82,12 +98,46 @@ public class Program
             Console.WriteLine($"Список клиентов пуст!");
             return;
         }
-        foreach(var client in clients)
+        foreach (var client in clients)
         {
             Console.WriteLine(client);
         }
     }
+    public static void PrintOrder(List<Order> orders)
+    {
+        if (!orders.Any())
+        {
+            Console.WriteLine($"Список заказов пуст!");
+            return;
+        }
+        foreach (var order in orders)
+        {
+            Console.WriteLine(order);
+        }
+    }
 
+}
+public class OrderRepository : BaseRepository<Order>
+{
+    public OrderRepository(string filePath) : base(filePath)
+    {
+        if (_items.Any())
+        {
+            _nextId = _items.Cast<Order>().Max(o => o.Id) + 1;
+        }
+    }
+
+    public Order Add(int clientId, string description, decimal amount, DateOnly dueDare)
+    {
+        var order = new Order(_nextId, clientId, description, amount, dueDare);
+        _items.Add(order);
+        return order;
+    }
+
+    public List<Order> GetOrdersByClientId(int clientId)
+    {
+        return _items.Cast<Order>().Where(o =>  o.ClientId == clientId).ToList();
+    }
 }
 
 public record Client(int Id, string Name, string Email, DateTime CreateAt);
