@@ -5,6 +5,39 @@ using System.Linq;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 
+public sealed class CrmService
+{
+    private static readonly CrmService _instance = new CrmService();
+    private readonly ClientRepository _clientRepository;
+    private readonly OrderRepository _orderRepository;
+
+    private CrmService()
+    {
+        Console.WriteLine("Экземпляр CrmService создан!");
+        _clientRepository = new ClientRepository("clients.json");
+        _orderRepository = new OrderRepository("orders.json");
+
+    }
+    public static CrmService Instance => _instance;
+    
+    public async Task AddClientAsync(string name, string email)
+    {
+        _clientRepository.Add(name, email);
+        await _clientRepository.SaveAsync();
+        Console.WriteLine($"Клиент {name} успешно добавлен");
+    }
+
+    public List<Order> GetClientOrder(int clientId)
+    {
+        return _orderRepository.GetOrdersByClientId(clientId);
+    }
+
+    public List<Client> GetAllClient()
+    {
+        return _clientRepository.GetAll();
+    }
+}
+
 public abstract class BaseRepository<T> where T : class
 {
     protected List<T> _items;
@@ -60,35 +93,25 @@ public class Program
 {
     public static async Task Main(string[] args)
     {
-        Console.WriteLine("--- Тестирование моделей данных ---");
-
-        string clientFile = "clients.json";
-        var clientRepo = new ClientRepository(clientFile);
-
-        Console.WriteLine("--- Начальный список клиентов ---");
-        PrintClient(clientRepo.GetAll());
-
-        Console.WriteLine("--- Добавляем нового пользователя ---");
-        clientRepo.Add("Новый клиент", "new@top-academy.ru");
-        PrintClient(clientRepo.GetAll());
+        Console.WriteLine("--- Демонстрация работы CrmService ---");
         
-        await clientRepo.SaveAsync();
-        Console.WriteLine("Данные сохранены в файл");
+        var crmService = CrmService.Instance;
 
-        //================================================================
+        Console.WriteLine("--- Текущий список клиентов ---");
+        var client = crmService.GetAllClient();
 
-        string orderFile = "orders.json";
-        var orderRepo = new OrderRepository(orderFile);
+        Console.WriteLine(client);
 
-        Console.WriteLine("--- Начальный список заказов ---");
-        PrintOrder(orderRepo.GetAll());
 
-        Console.WriteLine("--- Добавляем новый заказ ---");
-        orderRepo.Add(1, "Разработать логотип", 15000m, DateOnly.FromDateTime(DateTime.Now.AddDays(10)));
-        PrintOrder(orderRepo.GetAll());
+        Console.WriteLine("--- Добавление нового клиента через сервис ---");
+        await crmService.AddClientAsync("ООО 'Рога и Копыты'", "test@mail.com");
+       
+        Console.WriteLine("--- Текущий список клиентов ---");
+        var clients = crmService.GetAllClient();
+        Console.WriteLine(clients);
 
-        await orderRepo.SaveAsync();
-        Console.WriteLine("Данные сохранены в файл");
+        client = crmService.GetAllClient();
+
     }
 
     public static void PrintClient(List<Client> clients)
