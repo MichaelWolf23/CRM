@@ -95,32 +95,62 @@ public sealed class CrmService
         _orderRepository = orderRepository;
     }
 
-    public void AddClient(Client client)
+    public Client AddClient(Client client)
     {
         _clientRepository.Add(client);
         _clientRepository.SaveAsync().Wait(); // .Wait() для простоты в консольном приложении
+        ClientAdded?.Invoke(client);
+
+        return client;
+
     }
 
     public IEnumerable<Client> GetAllClients() => _clientRepository.GetAll();
+
+    public event Action<Client> ClientAdded;
 }
 
+public class Nitifier
+{
+    public void OnClientAdded(Client client)
+    {
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine($"[Уведомления]: Добавлен новый клиент {client.Name} с Email: {client.Email}");
+        Console.ResetColor();
+    }
+}
 
 // --- СЛОЙ ПРЕДСТАВЛЕНИЯ (КОНСОЛЬ) ---
 public class Program
 {
     public static void Main(string[] args)
     {
-        Console.WriteLine("--- Демонстрация работы сервисного слоя ---");
+        //Console.WriteLine("--- Демонстрация работы сервисного слоя ---");
 
-        var newClient = new Client(3, "Ольга Иванова", "olga@test.com", DateTime.Now);
-        CrmService.Instance.AddClient(newClient);
+        //var newClient = new Client(3, "Ольга Иванова", "olga@test.com", DateTime.Now);
+        //CrmService.Instance.AddClient(newClient);
 
-        Console.WriteLine("\nВсе клиенты в системе:");
-        var allClients = CrmService.Instance.GetAllClients();
-        foreach (var client in allClients)
-        {
-            Console.WriteLine(client);
-        }
+        //Console.WriteLine("\nВсе клиенты в системе:");
+        //var allClients = CrmService.Instance.GetAllClients();
+        //foreach (var client in allClients)
+        //{
+        //    Console.WriteLine(client);
+        //}
+
+        var crmService = CrmService.Instance;
+        var nitifier = new Nitifier();
+
+        crmService.ClientAdded += nitifier.OnClientAdded;
+        Console.WriteLine("---Система CRM запущена---");
+        Console.WriteLine("Добавление нового клиента...");
+        var newClient1 = new Client(4, "Ивнов Иван", "top@top-academy.ru", DateTime.Now);
+        crmService.AddClient(newClient1);
+        Console.WriteLine("Отписываемся от уведомлений");
+
+        crmService.ClientAdded -= nitifier.OnClientAdded;
+
+        var newClient2 = new Client(5, "Семен Иван", "semen@top-academy.ru", DateTime.Now);
+        crmService.AddClient(newClient2);
 
         Console.ReadLine();
     }
