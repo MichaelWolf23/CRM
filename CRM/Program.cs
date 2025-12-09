@@ -17,6 +17,10 @@ public interface IRepository<T> where T : class
 public interface IClientRepository : IRepository<Client> { }
 public interface IOrderRepository : IRepository<Order> { }
 
+public interface IClientSearchStrategy
+{
+    bool IsMatch(Client client);
+}
 
 // --- МОДЕЛИ ДАННЫХ ---
 public record Client(int Id, string Name, string Email, DateTime CreatedAt) : IEntity;
@@ -24,6 +28,33 @@ public record Order(int Id, int ClientId, string Description, decimal Amount, Da
 
 
 // --- СЛОЙ ДОСТУПА К ДАННЫМ (РЕПОЗИТОРИИ) ---
+
+public class SearchClientByNameStrategy : IClientSearchStrategy
+{
+    private readonly string _name;
+    public SearchClientByNameStrategy(string name)
+    {
+        _name = name.ToLower();
+    }
+
+    public bool IsMatch(Client client)
+    {
+        return client.Name.ToLower().Contains(_name);
+    }
+}
+public class SearchClientByEmailStrategy : IClientSearchStrategy
+{
+    private readonly string _emailDomain;
+    public SearchClientByEmailStrategy(string emailDomain)
+    {
+        _emailDomain = emailDomain.ToLower();
+    }
+
+    public bool IsMatch(Client client)
+    {
+        return client.Email.ToLower().Contains(_emailDomain);
+    }
+}
 public abstract class BaseRepository<T> : IRepository<T> where T : class, IEntity
 {
     protected List<T> _items;
@@ -141,6 +172,10 @@ public sealed class CrmService
     public IEnumerable<Client> GetAllClients() => _clientRepository.GetAll();
 
     public event Action<Client> ClientAdded;
+    public IEnumerable<Client> FindClients(IClientSearchStrategy strategy)
+    {
+        return _clientRepository.GetAll().Where(client => strategy.IsMatch(client));
+    }
 }
 
 public class Nitifier
@@ -164,15 +199,25 @@ public class ConsoleUI
 
     public void Ran()
     {
-        Console.WriteLine("---Система CRM запущена---");
-        Console.WriteLine("Добавление нового клиента...");
-        var newClient1 = new Client(4, "Ивнов Иван", "top@top-academy.ru", DateTime.Now);
-        _crmServer.AddClient(newClient1);
+        _crmServer.AddClient(new Client(6, "Иванов Иван", "test@top.com", DateTime.Now));
+        _crmServer.AddClient(new Client(7, "Семен Иван", "test@top.com", DateTime.Now));
+        _crmServer.AddClient(new Client(8, "Костин Влад", "Kostin@top.com", DateTime.Now));
 
-        Console.WriteLine("Добавление нового клиента...");
-        var newClient2 = new Client(5, "Семен Иван", "semen@top-academy.ru", DateTime.Now);
-        _crmServer.AddClient(newClient2);
-        Console.ReadLine();
+        var nameStrategy = new SearchClientByNameStrategy("Иван");
+        var foundByName = _crmServer.FindClients(nameStrategy);
+        Console.WriteLine("Найдены клиенты по имени иван:");
+        foreach (var client in foundByName)
+        {
+            Console.WriteLine(client);
+        }
+
+        var emailStrategy = new SearchClientByEmailStrategy("test@top.com");
+        var foundByEmail = _crmServer.FindClients(emailStrategy);
+        Console.WriteLine("Найдены клиенты с почтой test@top.com:");
+        foreach (var client in foundByEmail)
+        {
+            Console.WriteLine(client);
+        }
 
     }
 }
