@@ -22,6 +22,49 @@ public interface IClientSearchStrategy
     bool IsMatch(Client client);
 }
 
+public abstract class BaseReportGenerator
+{
+    protected readonly CrmService _crmService;
+    protected BaseReportGenerator(CrmService crmService)
+    {
+        _crmService = crmService;
+    }
+    public void Generate()
+    {
+        GenerateHeader();
+        GenerateBody();
+        GenerateFooter(); 
+    }
+    protected virtual void GenerateHeader()
+    {
+        Console.WriteLine("==============================");
+        Console.WriteLine("=    ОТЧЕТ ПО СИСТЕМЕ CRM    =");
+        Console.WriteLine("==============================");
+
+    }
+    protected virtual void GenerateFooter()
+    {
+        Console.WriteLine("==================================");
+        Console.WriteLine($"Отчет сгенерирован {DateTime.Now}");
+        Console.WriteLine("==================================");
+    }
+    protected abstract void GenerateBody();
+}
+
+public class ClientListReport : BaseReportGenerator
+{
+    public ClientListReport(CrmService crmCervice) : base(crmCervice) { }
+    protected override void GenerateBody()
+    {
+        Console.WriteLine("--- Список всех клиентов ---");
+        var clients = _crmService.GetAllClients();
+        foreach (var client in clients)
+        {
+            Console.WriteLine($"ID: {client.Id}, Name: {client.Name}, Email: {client.Email}");
+        }
+    }
+}
+
 // --- МОДЕЛИ ДАННЫХ ---
 public record Client(int Id, string Name, string Email, DateTime CreatedAt) : IEntity;
 public record Order(int Id, int ClientId, string Description, decimal Amount, DateOnly DueDate): IEntity;
@@ -133,12 +176,43 @@ public class OrderRepository : BaseRepository<Order>, IOrderRepository
     }
 }
 
+public class ClientOrderReport : BaseReportGenerator
+{
+    public ClientOrderReport(CrmService crmService) : base(crmService) { }
+
+    protected override void GenerateBody()
+    {
+        Console.WriteLine("Детальный отчет по заказам клиентов");
+        var clients = _crmService.GetAllClients();
+        var allOrder = _crmService.GetAllOrder();
+
+        foreach (var client in clients)
+        {
+            Console.WriteLine($"Клиент: {client.Name} ({client.Id})");
+            var clientOrder = allOrder.Where(o => o.Id == client.Id);
+            if (clientOrder.Any())
+            {
+                foreach (var order in clientOrder)
+                {
+                    Console.WriteLine($"    -заказ #{order.Id}: {order.Description} на сумму {order.Amount:C}");
+                }
+            }
+            else
+            {
+                Console.WriteLine("    -Заказов нет.");
+            }
+        }
+    }
+}
+
 
 // --- СЛОЙ БИЗНЕС-ЛОГИКИ (СЕРВИС) ---
 public sealed class CrmService
 {
     private readonly IClientRepository _clientRepository;
     private readonly IOrderRepository _orderRepository;
+
+    public IEnumerable<Order> GetAllOrder() => _orderRepository.GetAll();
 
     private static readonly Lazy<CrmService> lazy = new Lazy<CrmService>(() =>
     {
@@ -218,6 +292,15 @@ public class ConsoleUI
         {
             Console.WriteLine(client);
         }
+        Console.WriteLine("\n\n --- Демонстрация паттерна Шаблонный метод ---");
+
+        BaseReportGenerator clientReport = new ClientListReport(_crmServer);
+        Console.WriteLine("\n --- Генерация простого отчета по клиентам  ---");
+        clientReport.Generate();
+
+        BaseReportGenerator orderReport = new ClientOrderReport(_crmServer);
+        Console.WriteLine("\n --- Генерация простого отчета по клиентам  ---");
+        orderReport.Generate();
 
     }
 }
