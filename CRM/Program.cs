@@ -24,10 +24,12 @@ public interface IClientSearchStrategy
 
 public abstract class BaseReportGenerator
 {
-    protected readonly CrmService _crmService;
-    protected BaseReportGenerator(CrmService crmService)
+    protected readonly IOrderReady _orderReader;
+    protected readonly IClientReady _clientReader;
+    protected BaseReportGenerator(IClientReady clientReader, IOrderReady orderReader)
     {
-        _crmService = crmService;
+        _orderReader = orderReader;
+        _clientReader = clientReader;
     }
     public void Generate()
     {
@@ -53,11 +55,11 @@ public abstract class BaseReportGenerator
 
 public class ClientListReport : BaseReportGenerator
 {
-    public ClientListReport(CrmService crmCervice) : base(crmCervice) { }
+    public ClientListReport(IClientReady clientReader, IOrderReady orderReader) : base(clientReader, orderReader) { }
     protected override void GenerateBody()
     {
         Console.WriteLine("--- Список всех клиентов ---");
-        var clients = _crmService.GetAllClients();
+        var clients = _clientReader.GetAllClients();
         foreach (var client in clients)
         {
             Console.WriteLine($"ID: {client.Id}, Name: {client.Name}, Email: {client.Email}");
@@ -178,13 +180,13 @@ public class OrderRepository : BaseRepository<Order>, IOrderRepository
 
 public class ClientOrderReport : BaseReportGenerator
 {
-    public ClientOrderReport(CrmService crmService) : base(crmService) { }
+    public ClientOrderReport(IClientReady clientReader, IOrderReady orderReader) : base(clientReader, orderReader) { }
 
     protected override void GenerateBody()
     {
         Console.WriteLine("Детальный отчет по заказам клиентов");
-        var clients = _crmService.GetAllClients();
-        var allOrder = _crmService.GetAllOrder();
+        var clients = _clientReader.GetAllClients();
+        var allOrder = _orderReader.GetAllOrder();
 
         foreach (var client in clients)
         {
@@ -207,7 +209,7 @@ public class ClientOrderReport : BaseReportGenerator
 
 
 // --- СЛОЙ БИЗНЕС-ЛОГИКИ (СЕРВИС) ---
-public sealed class CrmService
+public sealed class CrmService : IClientReady, IClientWriter, IOrderReady
 {
     private readonly IClientRepository _clientRepository;
     private readonly IOrderRepository _orderRepository;
@@ -264,21 +266,23 @@ public class Nitifier
 
 public class ConsoleUI
 {
-    private readonly CrmService _crmServer;
+    protected readonly IClientReady _clientReader;
+    protected readonly IClientWriter _clientWriter;
 
-    public ConsoleUI(CrmService crmServer)
+    public ConsoleUI(IClientReady clientReader, IClientWriter clientWriter)
     {
-        _crmServer = crmServer;
+        _clientReader = clientReader;
+        _clientWriter = clientWriter;
     }
 
-    public void Ran()
+    public void Ran(BaseReportGenerator generator1, BaseReportGenerator generator2)
     {
-        _crmServer.AddClient(new Client(6, "Иванов Иван", "test@top.com", DateTime.Now));
-        _crmServer.AddClient(new Client(7, "Семен Иван", "test@top.com", DateTime.Now));
-        _crmServer.AddClient(new Client(8, "Костин Влад", "Kostin@top.com", DateTime.Now));
+        _clientWriter.AddClient("Иванов Иван", "test@top.com");
+        _clientWriter.AddClient("Семен Иван", "test@top.com");
+        _clientWriter.AddClient("Костин Влад", "Kostin@top.com");
 
         var nameStrategy = new SearchClientByNameStrategy("Иван");
-        var foundByName = _crmServer.FindClients(nameStrategy);
+        var foundByName = _clientReader.FindClients(nameStrategy);
         Console.WriteLine("Найдены клиенты по имени иван:");
         foreach (var client in foundByName)
         {
@@ -286,22 +290,15 @@ public class ConsoleUI
         }
 
         var emailStrategy = new SearchClientByEmailStrategy("test@top.com");
-        var foundByEmail = _crmServer.FindClients(emailStrategy);
+        var foundByEmail = _clientReader.FindClients(emailStrategy);
         Console.WriteLine("Найдены клиенты с почтой test@top.com:");
         foreach (var client in foundByEmail)
         {
             Console.WriteLine(client);
         }
-        Console.WriteLine("\n\n --- Демонстрация паттерна Шаблонный метод ---");
 
-        BaseReportGenerator clientReport = new ClientListReport(_crmServer);
-        Console.WriteLine("\n --- Генерация простого отчета по клиентам  ---");
-        clientReport.Generate();
-
-        BaseReportGenerator orderReport = new ClientOrderReport(_crmServer);
-        Console.WriteLine("\n --- Генерация простого отчета по клиентам  ---");
-        orderReport.Generate();
-
+        generator1.Generate();
+        generator2.Generate();
     }
 }
 
@@ -312,12 +309,29 @@ public class Program
     {
         var crmService = CrmService.Instance;
         var nitifier = new Nitifier();
-        var ui = new ConsoleUI(crmService);
+        var ui = new ConsoleUI(crmService, crmService);
 
         crmService.ClientAdded += nitifier.OnClientAdded;
 
-        ui.Ran();
+        BaseReportGenerator clientReport = new ClientListReport(crmService, crmService);
+        BaseReportGenerator orderReport = new ClientOrderReport(crmService, crmService);
+
+        ui.Ran(clientReport, orderReport);
     }
 }
 
+public interface IClientReady
+{
+    IEnumerable<Client> GetAllClients();
+    IEnumerable<Client> FindClients(IClientSearchStrategy strategy);
+}
 
+public interface IClientWriter
+{
+    Client AddClient(string name, string email);
+}
+
+public interface IOrderReady
+{
+    IEnumerable<Order> GetAllOrders();
+}
