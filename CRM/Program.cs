@@ -6,12 +6,25 @@ using System.Threading.Tasks;
 using Newtonsoft.Json;
 
 // --- ИНТЕРФЕЙСЫ (КОНТРАКТЫ) ---
-public interface IRepository<T> where T : class
+
+public interface IEntity
+{
+    int Id { get; }
+}
+
+public interface IStorage<T>
+{
+    Task SaveAsync(List<T> items);
+    List<T> Load();
+}
+
+public interface IRepository<T> where T : class, IEntity
 {
     IEnumerable<T> GetAll();
     T GetById(int id);
     void Add(T entity);
     Task SaveAsync();
+    int GetNextId();
 }
 
 public interface IClientRepository : IRepository<Client> { }
@@ -22,208 +35,119 @@ public interface IClientSearchStrategy
     bool IsMatch(Client client);
 }
 
-public abstract class BaseReportGenerator
+// Новые, сфокусированные интерфейсы для CrmService
+public interface IClientReader
 {
-    protected readonly IOrderReady _orderReader;
-    protected readonly IClientReady _clientReader;
-    protected BaseReportGenerator(IClientReady clientReader, IOrderReady orderReader)
-    {
-        _orderReader = orderReader;
-        _clientReader = clientReader;
-    }
-    public void Generate()
-    {
-        GenerateHeader();
-        GenerateBody();
-        GenerateFooter(); 
-    }
-    protected virtual void GenerateHeader()
-    {
-        Console.WriteLine("==============================");
-        Console.WriteLine("=    ОТЧЕТ ПО СИСТЕМЕ CRM    =");
-        Console.WriteLine("==============================");
-
-    }
-    protected virtual void GenerateFooter()
-    {
-        Console.WriteLine("==================================");
-        Console.WriteLine($"Отчет сгенерирован {DateTime.Now}");
-        Console.WriteLine("==================================");
-    }
-    protected abstract void GenerateBody();
+    IEnumerable<Client> GetAllClients();
+    IEnumerable<Client> FindClients(IClientSearchStrategy strategy);
 }
 
-public class ClientListReport : BaseReportGenerator
+public interface IClientWriter
 {
-    public ClientListReport(IClientReady clientReader, IOrderReady orderReader) : base(clientReader, orderReader) { }
-    protected override void GenerateBody()
-    {
-        Console.WriteLine("--- Список всех клиентов ---");
-        var clients = _clientReader.GetAllClients();
-        foreach (var client in clients)
-        {
-            Console.WriteLine($"ID: {client.Id}, Name: {client.Name}, Email: {client.Email}");
-        }
-    }
+    Client AddClient(string name, string email);
 }
+
+public interface IOrderReader
+{
+    IEnumerable<Order> GetAllOrders();
+}
+
 
 // --- МОДЕЛИ ДАННЫХ ---
 public record Client(int Id, string Name, string Email, DateTime CreatedAt) : IEntity;
-public record Order(int Id, int ClientId, string Description, decimal Amount, DateOnly DueDate): IEntity;
+public record Order(int Id, int ClientId, string Description, decimal Amount, DateOnly DueDate) : IEntity;
+
+
+// --- СЛОЙ ХРАНЕНИЯ ДАННЫХ (STORAGE) ---
+public class JsonFileStorage<T> : IStorage<T>
+{
+    private readonly string _filePath;
+    public JsonFileStorage(string filePath) { _filePath = filePath; }
+
+    public List<T> Load()
+    {
+        if (!File.Exists(_filePath)) return new List<T>();
+        var json = File.ReadAllText(_filePath);
+        return JsonConvert.DeserializeObject<List<T>>(json) ?? new List<T>();
+    }
+
+    public async Task SaveAsync(List<T> items)
+    {
+        var json = JsonConvert.SerializeObject(items, Newtonsoft.Json.Formatting.Indented);
+        await File.WriteAllTextAsync(_filePath, json);
+    }
+}
 
 
 // --- СЛОЙ ДОСТУПА К ДАННЫМ (РЕПОЗИТОРИИ) ---
-
-public class SearchClientByNameStrategy : IClientSearchStrategy
-{
-    private readonly string _name;
-    public SearchClientByNameStrategy(string name)
-    {
-        _name = name.ToLower();
-    }
-
-    public bool IsMatch(Client client)
-    {
-        return client.Name.ToLower().Contains(_name);
-    }
-}
-public class SearchClientByEmailStrategy : IClientSearchStrategy
-{
-    private readonly string _emailDomain;
-    public SearchClientByEmailStrategy(string emailDomain)
-    {
-        _emailDomain = emailDomain.ToLower();
-    }
-
-    public bool IsMatch(Client client)
-    {
-        return client.Email.ToLower().Contains(_emailDomain);
-    }
-}
 public abstract class BaseRepository<T> : IRepository<T> where T : class, IEntity
 {
     protected List<T> _items;
     private readonly IStorage<T> _storage;
-
 
     protected BaseRepository(IStorage<T> storage)
     {
         _storage = storage;
         _items = _storage.Load();
     }
+
+    public void Add(T entity) => _items.Add(entity);
+    public IEnumerable<T> GetAll() => _items;
+    public abstract T GetById(int id);
+
     public async Task SaveAsync()
     {
         await _storage.SaveAsync(_items);
     }
+
     public int GetNextId()
     {
         return _items.Any() ? _items.Max(e => e.Id) + 1 : 1;
-    }
-    public void Add(T entity) => _items.Add(entity);
-    public IEnumerable<T> GetAll() => _items;
-    public abstract T GetById(int id);
-}
-
-public interface IEntity
-{
-    int Id { get; }
-}
-
-
-
-public interface IStorage<T>
-{
-    Task SaveAsync(List<T> item);
-    List<T> Load();
-}
-
-public class JsonFileStorage<T> : IStorage<T>
-{
-    private readonly string _filePath;
-    public JsonFileStorage(string filePath)
-    {
-        _filePath = filePath;
-    }
-    public List<T> Load()
-    {
-        if (!File.Exists(_filePath))
-        {
-            return new List<T>();
-        }
-        var json = File.ReadAllText(_filePath);
-        return JsonConvert.DeserializeObject<List<T>>(json) ?? new List<T>();
-    }
-    public async Task SaveAsync(List<T> item)
-    {
-        var ison = JsonConvert.SerializeObject(item, Newtonsoft.Json.Formatting.Indented);
-        await File.WriteAllTextAsync(_filePath, ison);
     }
 }
 
 public class ClientRepository : BaseRepository<Client>, IClientRepository
 {
     public ClientRepository(IStorage<Client> storage) : base(storage) { }
-    public override Client GetById(int id)
-    {
-        return _items.FirstOrDefault(c => c.Id == id);
-    }
+    public override Client GetById(int id) => _items.FirstOrDefault(c => c.Id == id);
 }
 
 public class OrderRepository : BaseRepository<Order>, IOrderRepository
 {
     public OrderRepository(IStorage<Order> storage) : base(storage) { }
-    public override Order GetById(int id)
-    {
-        return _items.FirstOrDefault(o => o.Id == id);
-    }
+    public override Order GetById(int id) => _items.FirstOrDefault(o => o.Id == id);
 }
 
-public class ClientOrderReport : BaseReportGenerator
+
+// --- СТРАТЕГИИ ПОИСКА ---
+public class SearchClientsByNameStrategy : IClientSearchStrategy
 {
-    public ClientOrderReport(IClientReady clientReader, IOrderReady orderReader) : base(clientReader, orderReader) { }
+    private readonly string _name;
+    public SearchClientsByNameStrategy(string name) { _name = name.ToLower(); }
+    public bool IsMatch(Client client) => client.Name.ToLower().Contains(_name);
+}
 
-    protected override void GenerateBody()
-    {
-        Console.WriteLine("Детальный отчет по заказам клиентов");
-        var clients = _clientReader.GetAllClients();
-        var allOrder = _orderReader.GetAllOrder();
-
-        foreach (var client in clients)
-        {
-            Console.WriteLine($"Клиент: {client.Name} ({client.Id})");
-            var clientOrder = allOrder.Where(o => o.Id == client.Id);
-            if (clientOrder.Any())
-            {
-                foreach (var order in clientOrder)
-                {
-                    Console.WriteLine($"    -заказ #{order.Id}: {order.Description} на сумму {order.Amount:C}");
-                }
-            }
-            else
-            {
-                Console.WriteLine("    -Заказов нет.");
-            }
-        }
-    }
+public class SearchClientsByEmailStrategy : IClientSearchStrategy
+{
+    private readonly string _emailDomain;
+    public SearchClientsByEmailStrategy(string emailDomain) { _emailDomain = emailDomain.ToLower(); }
+    public bool IsMatch(Client client) => client.Email.ToLower().EndsWith(_emailDomain);
 }
 
 
 // --- СЛОЙ БИЗНЕС-ЛОГИКИ (СЕРВИС) ---
-public sealed class CrmService : IClientReady, IClientWriter, IOrderReady
+public sealed class CrmService : IClientReader, IClientWriter, IOrderReader
 {
     private readonly IClientRepository _clientRepository;
     private readonly IOrderRepository _orderRepository;
-
-    public IEnumerable<Order> GetAllOrder() => _orderRepository.GetAll();
+    public event Action<Client> ClientAdded;
 
     private static readonly Lazy<CrmService> lazy = new Lazy<CrmService>(() =>
     {
         var clientStorage = new JsonFileStorage<Client>("clients.json");
         var orderStorage = new JsonFileStorage<Order>("orders.json");
-
         var clientRepo = new ClientRepository(clientStorage);
         var orderRepo = new OrderRepository(orderStorage);
-
         return new CrmService(clientRepo, orderRepo);
     });
 
@@ -235,103 +159,190 @@ public sealed class CrmService : IClientReady, IClientWriter, IOrderReady
         _orderRepository = orderRepository;
     }
 
-    public Client AddClient(Client client)
+    public Client AddClient(string name, string email)
     {
+        var nextId = _clientRepository.GetNextId();
+        var client = new Client(nextId, name, email, DateTime.Now);
         _clientRepository.Add(client);
-        _clientRepository.SaveAsync().Wait(); // .Wait() для простоты в консольном приложении
+        _clientRepository.SaveAsync();
         ClientAdded?.Invoke(client);
-
         return client;
+    }
 
+    public Order AddOrderForClient(int clientId, string description, decimal amount)
+    {
+        var nextId = _orderRepository.GetNextId();
+        var order = new Order(nextId, clientId, description, amount, DateOnly.FromDateTime(DateTime.Now.AddDays(14)));
+        _orderRepository.Add(order);
+        _orderRepository.SaveAsync();
+        return order;
     }
 
     public IEnumerable<Client> GetAllClients() => _clientRepository.GetAll();
-
-    public event Action<Client> ClientAdded;
+    public IEnumerable<Order> GetAllOrders() => _orderRepository.GetAll();
     public IEnumerable<Client> FindClients(IClientSearchStrategy strategy)
     {
         return _clientRepository.GetAll().Where(client => strategy.IsMatch(client));
     }
 }
 
-public class Nitifier
+
+// --- КОМПОНЕНТЫ UI И УВЕДОМЛЕНИЙ ---
+public class Notifier
 {
     public void OnClientAdded(Client client)
     {
         Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine($"[Уведомления]: Добавлен новый клиент {client.Name} с Email: {client.Email}");
+        Console.WriteLine($"[Уведомление]: Добавлен новый клиент '{client.Name}' с Email: {client.Email}");
         Console.ResetColor();
     }
 }
 
+
+// --- ГЕНЕРАТОРЫ ОТЧЕТОВ ---
+public abstract class BaseReportGenerator
+{
+    protected readonly IClientReader _clientReader;
+    protected readonly IOrderReader _orderReader;
+
+    protected BaseReportGenerator(IClientReader clientReader, IOrderReader orderReader)
+    {
+        _clientReader = clientReader;
+        _orderReader = orderReader;
+    }
+    public void Generate()
+    {
+        GenerateHeader();
+        GenerateBody();
+        GenerateFooter();
+    }
+    protected virtual void GenerateHeader()
+    {
+        Console.WriteLine("===================================");
+        Console.WriteLine("        ОТЧЕТ ПО СИСТЕМЕ CRM       ");
+        Console.WriteLine("===================================");
+    }
+    protected virtual void GenerateFooter()
+    {
+        Console.WriteLine("-----------------------------------");
+        Console.WriteLine($"Отчет сгенерирован: {DateTime.Now}");
+        Console.WriteLine("===================================");
+    }
+    protected abstract void GenerateBody();
+}
+
+public class ClientListReport : BaseReportGenerator
+{
+    public ClientListReport(IClientReader clientReader, IOrderReader orderReader)
+        : base(clientReader, orderReader) { }
+
+    protected override void GenerateBody()
+    {
+        Console.WriteLine("\n--- Список всех клиентов ---");
+        var clients = _clientReader.GetAllClients();
+        foreach (var client in clients)
+        {
+            Console.WriteLine($"ID: {client.Id}, Имя: {client.Name}, Email: {client.Email}");
+        }
+    }
+}
+
+public class ClientOrdersReport : BaseReportGenerator
+{
+    public ClientOrdersReport(IClientReader clientReader, IOrderReader orderReader)
+        : base(clientReader, orderReader) { }
+
+    protected override void GenerateBody()
+    {
+        Console.WriteLine("\n--- Детальный отчет по заказам клиентов ---");
+        var clients = _clientReader.GetAllClients();
+        var allOrders = _orderReader.GetAllOrders();
+
+        foreach (var client in clients)
+        {
+            Console.WriteLine($"\nКлиент: {client.Name} (ID: {client.Id})");
+            var clientOrders = allOrders.Where(o => o.ClientId == client.Id);
+            if (clientOrders.Any())
+            {
+                foreach (var order in clientOrders)
+                {
+                    Console.WriteLine($"  - Заказ #{order.Id}: {order.Description} на сумму {order.Amount:C}");
+                }
+            }
+            else
+            {
+                Console.WriteLine("  - Заказов нет.");
+            }
+        }
+    }
+}
+
+// --- СЛОЙ ПРЕДСТАВЛЕНИЯ ---
 public class ConsoleUI
 {
-    protected readonly IClientReady _clientReader;
-    protected readonly IClientWriter _clientWriter;
+    private readonly IClientReader _clientReader;
+    private readonly IClientWriter _clientWriter;
 
-    public ConsoleUI(IClientReady clientReader, IClientWriter clientWriter)
+    public ConsoleUI(IClientReader clientReader, IClientWriter clientWriter)
     {
         _clientReader = clientReader;
         _clientWriter = clientWriter;
     }
 
-    public void Ran(BaseReportGenerator generator1, BaseReportGenerator generator2)
+    public void Run(BaseReportGenerator report1, BaseReportGenerator report2)
     {
-        _clientWriter.AddClient("Иванов Иван", "test@top.com");
-        _clientWriter.AddClient("Семен Иван", "test@top.com");
-        _clientWriter.AddClient("Костин Влад", "Kostin@top.com");
+        Console.WriteLine("--- Система CRM запущена ---");
+        _clientWriter.AddClient("Иван Иванов", "ivan@example.com");
+        _clientWriter.AddClient("Мария Петрова", "maria@example.com");
 
-        var nameStrategy = new SearchClientByNameStrategy("Иван");
-        var foundByName = _clientReader.FindClients(nameStrategy);
-        Console.WriteLine("Найдены клиенты по имени иван:");
-        foreach (var client in foundByName)
-        {
-            Console.WriteLine(client);
-        }
+        Console.WriteLine("\n--- Генерация простого отчета по клиентам ---");
+        report1.Generate();
 
-        var emailStrategy = new SearchClientByEmailStrategy("test@top.com");
-        var foundByEmail = _clientReader.FindClients(emailStrategy);
-        Console.WriteLine("Найдены клиенты с почтой test@top.com:");
-        foreach (var client in foundByEmail)
-        {
-            Console.WriteLine(client);
-        }
+        Console.WriteLine("\n\n--- Генерация детального отчета по заказам ---");
+        report2.Generate();
 
-        generator1.Generate();
-        generator2.Generate();
+        Console.ReadLine();
     }
 }
 
-// --- СЛОЙ ПРЕДСТАВЛЕНИЯ (КОНСОЛЬ) ---
+// --- ТОЧКА ВХОДА (КОРЕНЬ КОМПОЗИЦИИ) ---
 public class Program
 {
     public static void Main(string[] args)
     {
         var crmService = CrmService.Instance;
-        var nitifier = new Nitifier();
+        var notifier = new Notifier();
         var ui = new ConsoleUI(crmService, crmService);
 
-        crmService.ClientAdded += nitifier.OnClientAdded;
+        crmService.ClientAdded += notifier.OnClientAdded;
 
-        BaseReportGenerator clientReport = new ClientListReport(crmService, crmService);
-        BaseReportGenerator orderReport = new ClientOrderReport(crmService, crmService);
+       ReportGeneratorFactory clientReportFactory = new ClientListReportFactory();
+       ReportGeneratorFactory orderReportFactory = new ClientOrderReportFactory();
 
-        ui.Ran(clientReport, orderReport);
+        BaseReportGenerator clientReport = clientReportFactory.CreateGenerator(crmService, crmService);
+        BaseReportGenerator ordersReport = clientReportFactory.CreateGenerator(crmService, crmService);
+
+        ui.Run(clientReport, ordersReport);
     }
 }
 
-public interface IClientReady
+public abstract class ReportGeneratorFactory
 {
-    IEnumerable<Client> GetAllClients();
-    IEnumerable<Client> FindClients(IClientSearchStrategy strategy);
+    public abstract BaseReportGenerator CreateGenerator(IClientReader clientReader, IOrderReader orderReader);
 }
 
-public interface IClientWriter
+public class ClientListReportFactory : ReportGeneratorFactory
 {
-    Client AddClient(string name, string email);
+    public override BaseReportGenerator CreateGenerator(IClientReader clientReader, IOrderReader orderReader)
+    {
+        return new ClientListReport(clientReader, orderReader);
+    }
 }
 
-public interface IOrderReady
+public class ClientOrderReportFactory : ReportGeneratorFactory
 {
-    IEnumerable<Order> GetAllOrders();
+    public override BaseReportGenerator CreateGenerator(IClientReader clientReader, IOrderReader orderReader)
+    {
+        return new ClientOrdersReport(clientReader, orderReader);
+    }
 }
