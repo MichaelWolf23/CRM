@@ -146,7 +146,9 @@ public sealed class CrmService : IClientReader, IClientWriter, IOrderReader
     {
         var clientStorage = new JsonFileStorage<Client>("clients.json");
         var orderStorage = new JsonFileStorage<Order>("orders.json");
-        var clientRepo = new ClientRepository(clientStorage);
+
+        var realClientRepo = new ClientRepository(clientStorage);
+        var clientRepo = new ClientRepositoryProxy(realClientRepo);
         var orderRepo = new OrderRepository(orderStorage);
         return new CrmService(clientRepo, orderRepo);
     });
@@ -301,8 +303,22 @@ public class ConsoleUI
         Console.WriteLine("\n\n--- Генерация детального отчета по заказам ---");
         report2.Generate();
 
+        _clientWriter.AddClient("Сидоров Вася", "qwerqwer@qwer.swer");
+        Console.WriteLine("\n--- Дкмонстрация паттерна Заместитель Proxy ---");
+        Console.WriteLine("Первый запрос клиента с ID=1");
+        _clientReader.FindClients(new ClientByIdStrategy(1));
+        Console.WriteLine("Второй (повторный) запрос клиента с ID=1");
+        _clientReader.FindClients(new ClientByIdStrategy(1));
+
         Console.ReadLine();
     }
+}
+
+public class ClientByIdStrategy : IClientSearchStrategy
+{
+    private readonly int _id;
+    public ClientByIdStrategy(int id) { _id = id; }
+    public bool IsMatch(Client client) => client.Id.Contains(_id);
 }
 
 // --- ТОЧКА ВХОДА (КОРЕНЬ КОМПОЗИЦИИ) ---
@@ -344,5 +360,52 @@ public class ClientOrderReportFactory : ReportGeneratorFactory
     public override BaseReportGenerator CreateGenerator(IClientReader clientReader, IOrderReader orderReader)
     {
         return new ClientOrdersReport(clientReader, orderReader);
+    }
+}
+
+public class ClientRepositoryProxy : IClientRepository
+{
+    private readonly IClientRepository _readRepository;
+    private Dictionary<int, Client> _cache;
+    public ClientRepositoryProxy(IClientRepository readRepository)
+    {
+        _readRepository = readRepository;
+        _cache = new Dictionary<int, Client>();
+    }
+    public void Add(Client entity) => _readRepository.Add(entity);
+    public IEnumerable<Client> GetAll() => _readRepository.GetAll();
+    public Client GetById(int id) => _readRepository.GetById(id);
+    public int GetNextId() => _readRepository.GetNextId();
+    public Task SaveAsync() => _readRepository.SaveAsync();
+    public Client GetById(int id)
+    {
+        if (_cache.TryGetValue(id, out var cachedClient))
+        {
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.WriteLine($"[Proxy] Клиент с ID={id} не неаден в кэше.");
+            Console.ResetColor();
+            return cachedClient;
+        }
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine($"[Proxy] Клиент с ID={id} не неаден в кэше. Запрос к реальному репозиторию...");
+        Console.ResetColor();
+
+        var client = _readRepository.GetById(id);
+
+        if ( client != null )
+        {
+            _cache[id] = client;
+        }
+
+        return client;
+    }
+    public void Add(Client entity)
+    {
+        _readRepository.Add(entity);
+
+        Console.ForegroundColor = ConsoleColor.Magenta;
+        Console.WriteLine($"[Proxy] Кэш очищен из-за добавления новой записи.");
+        Console.ResetColor();
+        _cache.Clear();
     }
 }
