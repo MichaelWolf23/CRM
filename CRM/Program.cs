@@ -30,16 +30,9 @@ public interface IRepository<T> where T : class, IEntity
 public interface IClientRepository : IRepository<Client> { }
 public interface IOrderRepository : IRepository<Order> { }
 
-public interface IClientSearchStrategy
-{
-    bool IsMatch(Client client);
-}
-
-// Новые, сфокусированные интерфейсы для CrmService
 public interface IClientReader
 {
     IEnumerable<Client> GetAllClients();
-    IEnumerable<Client> FindClients(IClientSearchStrategy strategy);
 }
 
 public interface IClientWriter
@@ -52,11 +45,36 @@ public interface IOrderReader
     IEnumerable<Order> GetAllOrders();
 }
 
+public interface IOrderWriter
+{
+    Order AddOrderForClient(int clientId, string description, decimal amount);
+}
+
+/// <summary>
+/// Интерфейс для Фасада, упрощающего работу с CRM.
+/// </summary>
+public interface ICrmFacade
+{
+    void RegisterNewClientWithFirstOrder(string clientName, string clientEmail, string orderDescription, decimal orderAmount);
+}
+
+/// <summary>
+/// Интерфейс "Строителя" для отчетов
+/// </summary>
+public interface IReportBuilder
+{
+    void Reset();
+    void BuildTitle(string title);
+    void BuildClientSection();
+    void BuildOrderSection();
+    void BuildSummary();
+    Report GetResult();
+}
+
 
 // --- МОДЕЛИ ДАННЫХ ---
 public record Client(int Id, string Name, string Email, DateTime CreatedAt) : IEntity;
 public record Order(int Id, int ClientId, string Description, decimal Amount, DateOnly DueDate) : IEntity;
-
 
 // --- СЛОЙ ХРАНЕНИЯ ДАННЫХ (STORAGE) ---
 public class JsonFileStorage<T> : IStorage<T>
@@ -77,7 +95,6 @@ public class JsonFileStorage<T> : IStorage<T>
         await File.WriteAllTextAsync(_filePath, json);
     }
 }
-
 
 // --- СЛОЙ ДОСТУПА К ДАННЫМ (РЕПОЗИТОРИИ) ---
 public abstract class BaseRepository<T> : IRepository<T> where T : class, IEntity
@@ -118,25 +135,8 @@ public class OrderRepository : BaseRepository<Order>, IOrderRepository
     public override Order GetById(int id) => _items.FirstOrDefault(o => o.Id == id);
 }
 
-
-// --- СТРАТЕГИИ ПОИСКА ---
-public class SearchClientsByNameStrategy : IClientSearchStrategy
-{
-    private readonly string _name;
-    public SearchClientsByNameStrategy(string name) { _name = name.ToLower(); }
-    public bool IsMatch(Client client) => client.Name.ToLower().Contains(_name);
-}
-
-public class SearchClientsByEmailStrategy : IClientSearchStrategy
-{
-    private readonly string _emailDomain;
-    public SearchClientsByEmailStrategy(string emailDomain) { _emailDomain = emailDomain.ToLower(); }
-    public bool IsMatch(Client client) => client.Email.ToLower().EndsWith(_emailDomain);
-}
-
-
 // --- СЛОЙ БИЗНЕС-ЛОГИКИ (СЕРВИС) ---
-public sealed class CrmService : IClientReader, IClientWriter, IOrderReader
+public sealed class CrmService : IClientReader, IClientWriter, IOrderReader, IOrderWriter
 {
     private readonly IClientRepository _clientRepository;
     private readonly IOrderRepository _orderRepository;
@@ -146,9 +146,7 @@ public sealed class CrmService : IClientReader, IClientWriter, IOrderReader
     {
         var clientStorage = new JsonFileStorage<Client>("clients.json");
         var orderStorage = new JsonFileStorage<Order>("orders.json");
-
-        var realClientRepo = new ClientRepository(clientStorage);
-        var clientRepo = new ClientRepositoryProxy(realClientRepo);
+        var clientRepo = new ClientRepository(clientStorage);
         var orderRepo = new OrderRepository(orderStorage);
         return new CrmService(clientRepo, orderRepo);
     });
@@ -182,12 +180,89 @@ public sealed class CrmService : IClientReader, IClientWriter, IOrderReader
 
     public IEnumerable<Client> GetAllClients() => _clientRepository.GetAll();
     public IEnumerable<Order> GetAllOrders() => _orderRepository.GetAll();
-    public IEnumerable<Client> FindClients(IClientSearchStrategy strategy)
+}
+
+// --- ФАСАД ---
+public class CrmFacade : ICrmFacade
+{
+    private readonly IClientWriter _clientWriter;
+    private readonly IOrderWriter _orderWriter;
+
+    public CrmFacade(IClientWriter clientWriter, IOrderWriter orderWriter)
     {
-        return _clientRepository.GetAll().Where(client => strategy.IsMatch(client));
+        _clientWriter = clientWriter;
+        _orderWriter = orderWriter;
+    }
+
+    public void RegisterNewClientWithFirstOrder(string clientName, string clientEmail, string orderDescription, decimal orderAmount)
+    {
+        Console.WriteLine("\n[Facade] Выполняется сложный сценарий...");
+        var client = _clientWriter.AddClient(clientName, clientEmail);
+        _orderWriter.AddOrderForClient(client.Id, orderDescription, orderAmount);
+        Console.WriteLine("[Facade] Сценарий успешно завершен.");
     }
 }
 
+// --- ПАТТЕРН СТРОИТЕЛЬ ---
+public class Report
+{
+    private readonly List<string> _parts = new();
+    public void AddPart(string part) => _parts.Add(part);
+    public void DisplayReport()
+    {
+        Console.WriteLine("\n--- НАЧАЛО ОТЧЕТА ---");
+        foreach (var part in _parts) Console.WriteLine(part);
+        Console.WriteLine("--- КОНЕЦ ОТЧЕТА ---\n");
+    }
+}
+
+public class SalesReportBuilder : IReportBuilder
+{
+    private Report _report;
+    private readonly IClientReader _clientReader;
+    private readonly IOrderReader _orderReader;
+
+    public SalesReportBuilder(IClientReader clientReader, IOrderReader orderReader)
+    {
+        _clientReader = clientReader;
+        _orderReader = orderReader;
+        Reset();
+    }
+
+    public void Reset() => _report = new Report();
+    public void BuildTitle(string title) => _report.AddPart($"====== {title.ToUpper()} ======");
+    public void BuildClientSection()
+    {
+        _report.AddPart("\n--- Секция клиентов ---");
+        var clients = _clientReader.GetAllClients();
+        foreach (var client in clients) _report.AddPart(client.ToString());
+    }
+    public void BuildOrderSection()
+    {
+        _report.AddPart("\n--- Секция заказов ---");
+        var orders = _orderReader.GetAllOrders();
+        foreach (var order in orders) _report.AddPart(order.ToString());
+    }
+    public void BuildSummary()
+    {
+        _report.AddPart("\n--- Итоговая сводка ---");
+        _report.AddPart($"Всего клиентов: {_clientReader.GetAllClients().Count()}");
+        _report.AddPart($"Всего заказов: {_orderReader.GetAllOrders().Count()}");
+    }
+    public Report GetResult() => _report;
+}
+
+public class ReportDirector
+{
+    public void BuildFullReport(IReportBuilder builder)
+    {
+        builder.Reset();
+        builder.BuildTitle("Полный отчет по продажам");
+        builder.BuildClientSection();
+        builder.BuildOrderSection();
+        builder.BuildSummary();
+    }
+}
 
 // --- КОМПОНЕНТЫ UI И УВЕДОМЛЕНИЙ ---
 public class Notifier
@@ -195,130 +270,43 @@ public class Notifier
     public void OnClientAdded(Client client)
     {
         Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine($"[Уведомление]: Добавлен новый клиент '{client.Name}' с Email: {client.Email}");
+        Console.WriteLine($"[Уведомление]: Добавлен новый клиент '{client.Name}'");
         Console.ResetColor();
     }
 }
 
-
-// --- ГЕНЕРАТОРЫ ОТЧЕТОВ ---
-public abstract class BaseReportGenerator
+public class ConsoleUI
 {
-    protected readonly IClientReader _clientReader;
-    protected readonly IOrderReader _orderReader;
+    private readonly ICrmFacade _crmFacade;
+    // Для демонстрации Строителя нам нужны ридеры
+    private readonly IClientReader _clientReader;
+    private readonly IOrderReader _orderReader;
 
-    protected BaseReportGenerator(IClientReader clientReader, IOrderReader orderReader)
+    public ConsoleUI(ICrmFacade crmFacade, IClientReader clientReader, IOrderReader orderReader)
     {
+        _crmFacade = crmFacade;
         _clientReader = clientReader;
         _orderReader = orderReader;
     }
-    public void Generate()
+
+    public void Run()
     {
-        GenerateHeader();
-        GenerateBody();
-        GenerateFooter();
-    }
-    protected virtual void GenerateHeader()
-    {
-        Console.WriteLine("===================================");
-        Console.WriteLine("        ОТЧЕТ ПО СИСТЕМЕ CRM       ");
-        Console.WriteLine("===================================");
-    }
-    protected virtual void GenerateFooter()
-    {
-        Console.WriteLine("-----------------------------------");
-        Console.WriteLine($"Отчет сгенерирован: {DateTime.Now}");
-        Console.WriteLine("===================================");
-    }
-    protected abstract void GenerateBody();
-}
+        Console.WriteLine("--- Демонстрация Фасада ---");
+        _crmFacade.RegisterNewClientWithFirstOrder(
+            "Сергей Павлов",
+            "sergey@example.com",
+            "Консультация по архитектуре",
+            15000);
 
-public class ClientListReport : BaseReportGenerator
-{
-    public ClientListReport(IClientReader clientReader, IOrderReader orderReader)
-        : base(clientReader, orderReader) { }
-
-    protected override void GenerateBody()
-    {
-        Console.WriteLine("\n--- Список всех клиентов ---");
-        var clients = _clientReader.GetAllClients();
-        foreach (var client in clients)
-        {
-            Console.WriteLine($"ID: {client.Id}, Имя: {client.Name}, Email: {client.Email}");
-        }
-    }
-}
-
-public class ClientOrdersReport : BaseReportGenerator
-{
-    public ClientOrdersReport(IClientReader clientReader, IOrderReader orderReader)
-        : base(clientReader, orderReader) { }
-
-    protected override void GenerateBody()
-    {
-        Console.WriteLine("\n--- Детальный отчет по заказам клиентов ---");
-        var clients = _clientReader.GetAllClients();
-        var allOrders = _orderReader.GetAllOrders();
-
-        foreach (var client in clients)
-        {
-            Console.WriteLine($"\nКлиент: {client.Name} (ID: {client.Id})");
-            var clientOrders = allOrders.Where(o => o.ClientId == client.Id);
-            if (clientOrders.Any())
-            {
-                foreach (var order in clientOrders)
-                {
-                    Console.WriteLine($"  - Заказ #{order.Id}: {order.Description} на сумму {order.Amount:C}");
-                }
-            }
-            else
-            {
-                Console.WriteLine("  - Заказов нет.");
-            }
-        }
-    }
-}
-
-// --- СЛОЙ ПРЕДСТАВЛЕНИЯ ---
-public class ConsoleUI
-{
-    private readonly IClientReader _clientReader;
-    private readonly IClientWriter _clientWriter;
-
-    public ConsoleUI(IClientReader clientReader, IClientWriter clientWriter)
-    {
-        _clientReader = clientReader;
-        _clientWriter = clientWriter;
-    }
-
-    public void Run(BaseReportGenerator report1, BaseReportGenerator report2)
-    {
-        Console.WriteLine("--- Система CRM запущена ---");
-        _clientWriter.AddClient("Иван Иванов", "ivan@example.com");
-        _clientWriter.AddClient("Мария Петрова", "maria@example.com");
-
-        Console.WriteLine("\n--- Генерация простого отчета по клиентам ---");
-        report1.Generate();
-
-        Console.WriteLine("\n\n--- Генерация детального отчета по заказам ---");
-        report2.Generate();
-
-        _clientWriter.AddClient("Сидоров Вася", "qwerqwer@qwer.swer");
-        Console.WriteLine("\n--- Дкмонстрация паттерна Заместитель Proxy ---");
-        Console.WriteLine("Первый запрос клиента с ID=1");
-        _clientReader.FindClients(new ClientByIdStrategy(1));
-        Console.WriteLine("Второй (повторный) запрос клиента с ID=1");
-        _clientReader.FindClients(new ClientByIdStrategy(1));
+        Console.WriteLine("\n--- Демонстрация Строителя ---");
+        var builder = new SalesReportBuilder(_clientReader, _orderReader);
+        var director = new ReportDirector();
+        director.BuildFullReport(builder);
+        Report report = builder.GetResult();
+        report.DisplayReport();
 
         Console.ReadLine();
     }
-}
-
-public class ClientByIdStrategy : IClientSearchStrategy
-{
-    private readonly int _id;
-    public ClientByIdStrategy(int id) { _id = id; }
-    public bool IsMatch(Client client) => client.Id.Contains(_id);
 }
 
 // --- ТОЧКА ВХОДА (КОРЕНЬ КОМПОЗИЦИИ) ---
@@ -328,84 +316,14 @@ public class Program
     {
         var crmService = CrmService.Instance;
         var notifier = new Notifier();
-        var ui = new ConsoleUI(crmService, crmService);
+        var facade = new CrmFacade(crmService, crmService);
+        var ui = new ConsoleUI(facade, crmService, crmService);
 
         crmService.ClientAdded += notifier.OnClientAdded;
 
-       ReportGeneratorFactory clientReportFactory = new ClientListReportFactory();
-       ReportGeneratorFactory orderReportFactory = new ClientOrderReportFactory();
-
-        BaseReportGenerator clientReport = clientReportFactory.CreateGenerator(crmService, crmService);
-        BaseReportGenerator ordersReport = clientReportFactory.CreateGenerator(crmService, crmService);
-
-        ui.Run(clientReport, ordersReport);
+        ui.Run();
     }
 }
 
-public abstract class ReportGeneratorFactory
-{
-    public abstract BaseReportGenerator CreateGenerator(IClientReader clientReader, IOrderReader orderReader);
-}
 
-public class ClientListReportFactory : ReportGeneratorFactory
-{
-    public override BaseReportGenerator CreateGenerator(IClientReader clientReader, IOrderReader orderReader)
-    {
-        return new ClientListReport(clientReader, orderReader);
-    }
-}
 
-public class ClientOrderReportFactory : ReportGeneratorFactory
-{
-    public override BaseReportGenerator CreateGenerator(IClientReader clientReader, IOrderReader orderReader)
-    {
-        return new ClientOrdersReport(clientReader, orderReader);
-    }
-}
-
-public class ClientRepositoryProxy : IClientRepository
-{
-    private readonly IClientRepository _readRepository;
-    private Dictionary<int, Client> _cache;
-    public ClientRepositoryProxy(IClientRepository readRepository)
-    {
-        _readRepository = readRepository;
-        _cache = new Dictionary<int, Client>();
-    }
-    public void Add(Client entity) => _readRepository.Add(entity);
-    public IEnumerable<Client> GetAll() => _readRepository.GetAll();
-    public Client GetById(int id) => _readRepository.GetById(id);
-    public int GetNextId() => _readRepository.GetNextId();
-    public Task SaveAsync() => _readRepository.SaveAsync();
-    public Client GetById(int id)
-    {
-        if (_cache.TryGetValue(id, out var cachedClient))
-        {
-            Console.ForegroundColor = ConsoleColor.Cyan;
-            Console.WriteLine($"[Proxy] Клиент с ID={id} не неаден в кэше.");
-            Console.ResetColor();
-            return cachedClient;
-        }
-        Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine($"[Proxy] Клиент с ID={id} не неаден в кэше. Запрос к реальному репозиторию...");
-        Console.ResetColor();
-
-        var client = _readRepository.GetById(id);
-
-        if ( client != null )
-        {
-            _cache[id] = client;
-        }
-
-        return client;
-    }
-    public void Add(Client entity)
-    {
-        _readRepository.Add(entity);
-
-        Console.ForegroundColor = ConsoleColor.Magenta;
-        Console.WriteLine($"[Proxy] Кэш очищен из-за добавления новой записи.");
-        Console.ResetColor();
-        _cache.Clear();
-    }
-}
